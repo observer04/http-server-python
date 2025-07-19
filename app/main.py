@@ -1,16 +1,17 @@
-import threading
-import socket
+import asyncio
 
 
-def handle_request(client_socket):
+async def handle_request(reader, writer):
     try:
-        request = client_socket.recv(1024).decode()
+        request = (await reader.read(1024)).decode()
         request_lines = request.splitlines()
+        
         if not request_lines or len(request_lines[0].split()) < 3:
             response = "HTTP/1.1 400 Bad Request\r\n\r\n"
         else:
             method, path, _ = request_lines[0].split()
             user_agent = ""
+            
             for line in request_lines[1:]:
                 if line.lower().startswith('user-agent'):
                     user_agent = line.split(":", maxsplit=1)[1].strip()
@@ -37,20 +38,22 @@ def handle_request(client_socket):
                 )
             else:
                 response = "HTTP/1.1 404 Not Found\r\n\r\n"
-        client_socket.sendall(response.encode())
+        writer.write(response.encode())
+        await writer.drain()
     except Exception:
-        client_socket.sendall(b"HTTP/1.1 400 Bad Request\r\n\r\n")
+        writer.write(b"HTTP/1.1 404 Bad Request\r\n\r\n")
+        await writer.drain()
     finally:
-        client_socket.close()
+        writer.close()
+        await writer.wait_closed()
 
 
-def main():
+async def main():
     print("Logs from your program will appear here!")
-    server_socket = socket.create_server(("localhost", 4221), reuse_port=True)
-    while True:
-        client_socket, _ = server_socket.accept()
-        threading.Thread(target=handle_request, args=(client_socket,)).start()
+    server= await asyncio.start_server(handle_request, 'localhost', 4221)
+    async with server:
+        await server.serve_forever()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main=main())

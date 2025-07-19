@@ -1,1 +1,40 @@
-it takes the bytes currently representing the ascii chars and makes binaries that follow utf8 which just a mapping from characters to bytes. for example englis ones are directly present in the ascii hence are mapped to decimals upto 128 
+it takes the bytes currently representing the ascii chars and makes binaries that follow utf8 which just a mapping from characters to bytes. for example englis ones are directly present in the ascii hence are mapped to decimals upto 128
+
+asyncio vs sockets/threading for TCP servers:
+
+1. Connection Handling
+- Sockets/Threads: accept() in a loop, spawn a thread for each client.
+- asyncio: asyncio.start_server() schedules a coroutine for each client using the event loop.
+
+2. Request Reading
+- Sockets/Threads: client_socket.recv(1024) (blocking).
+- asyncio: await reader.read(1024) (non-blocking, lets other coroutines run).
+
+3. Response Writing
+- Sockets/Threads: client_socket.sendall(response.encode()) (blocking).
+- asyncio: writer.write(response.encode()), await writer.drain() (async flush).
+
+4. Connection Closing
+- Sockets/Threads: client_socket.close().
+- asyncio: writer.close(), await writer.wait_closed() (async close).
+
+5. Concurrency Model
+- Sockets/Threads: Each connection runs in its own OS thread (overhead, limited by system resources).
+- asyncio: All connections handled by coroutines in a single thread (event loop, lightweight, scalable).
+
+6. Error Handling
+- Sockets/Threads: try/except in each thread.
+- asyncio: try/except in each coroutine (async context).
+
+Summary Table:
+| Feature           | Sockets/Threads         | asyncio                        |
+|-------------------|------------------------|--------------------------------|
+| Accept connection | accept() + thread      | start_server() + coroutine     |
+| Read request      | recv()                 | await reader.read()            |
+| Write response    | sendall()              | writer.write() + await drain() |
+| Close connection  | close()                | writer.close() + await wait_closed() |
+| Concurrency       | OS threads             | Event loop + coroutines        |
+| Error handling    | try/except             | try/except (async context)     |
+
+Practical Note:
+asyncio is ideal for high-concurrency, I/O-bound servers. It avoids thread overhead, is easier to debug, and is more scalable for many simultaneous connections.
