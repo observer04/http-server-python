@@ -17,11 +17,25 @@ def main():
         request_line = request.splitlines()[0]
         method, path, _ = request_line.split()
         
+        
         if path == "/":
             response = (
                 "HTTP/1.1 200 OK\r\n"
                 "\r\n"
             )
+        elif path.startswith('/echo/'):
+            echo_idx= len('/echo/')
+            echo_value= path[echo_idx:]
+            response = (
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: text/plain\r\n"
+                f"Content-Length: {len(echo_value)}\r\n"
+                "\r\n"
+                f"{echo_value}"
+            )
+        
+        
+        
         else:
             response = (
                 "HTTP/1.1 404 Not Found\r\n"
