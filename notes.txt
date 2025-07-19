@@ -1,0 +1,1 @@
+it takes the bytes currently representing the ascii chars and makes binaries that follow utf8 which just a mapping from characters to bytes. for example englis ones are directly present in the ascii hence are mapped to decimals upto 128 
