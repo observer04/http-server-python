@@ -12,12 +12,26 @@ def main():
     
     while True:
         c_socket, ret_addr= server_socket.accept() # wait for client
-        print(f"Connection from {ret_addr} has been established.")
-        response = (
-            "HTTP/1.1 200 OK\r\n"
-            "\r\n"
+        #read request from socket , parse it and respond
+        request = c_socket.recv(1024).decode()      #read first part of encoded http request
+        request_line = request.splitlines()[0]
+        method, path, _ = request_line.split()
+        
+        if path == "/":
+            response = (
+                "HTTP/1.1 200 OK\r\n"
+                "\r\n"
+            )
+        else:
+            response = (
+                "HTTP/1.1 404 Not Found\r\n"
+                "\r\n"
+            )
+        
+        
+        
             
-        )
+        
         c_socket.sendall(response.encode())
         c_socket.close()
         
