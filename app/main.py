@@ -1,4 +1,14 @@
 import asyncio
+from genericpath import isfile
+import sys
+import os
+
+
+#get dir from sys.argv
+directory = None
+for i, arg in enumerate(sys.argv):
+    if arg == "--directory" and i + 1 < len(sys.argv):
+        directory = sys.argv[i+1]
 
 
 async def handle_request(reader, writer):
@@ -36,6 +46,30 @@ async def handle_request(reader, writer):
                     "\r\n"
                     f"{user_agent}"
                 )
+            elif path.startswith('/files') and directory:
+                filename_idx = len("/files/")
+                filename = path[filename_idx:]
+                file_path = os.path.join(directory, filename)
+                
+                # respond file content if valid path else 404
+                if os.path.isfile(file_path):
+                    with open(file_path, 'rb') as f:
+                        file_content= f.read()
+
+                    response = (
+                        "HTTP/1.1 200 OK\r\n"
+                        "Content-Type: application/octet-stream\r\n"
+                        f"Content-Length: {len(file_content)}\r\n"
+                        "\r\n"
+                    )
+                    writer.write(response.encode() + file_content)
+                    await writer.drain()
+                    writer.close()
+                    await writer.wait_closed()
+                    return
+                else:
+                    response= "HTTP/1.1 404 Not Found\r\n\r\n"
+            
             else:
                 response = "HTTP/1.1 404 Not Found\r\n\r\n"
         writer.write(response.encode())
