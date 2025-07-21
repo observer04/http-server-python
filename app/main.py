@@ -74,9 +74,7 @@ async def handle_request(reader, writer):
                     
                     writer.write(response.encode()+ body_bytes)
                     await writer.drain()
-                    writer.close()
-                    await writer.wait_closed()
-                    return
+                    continue
                     
                 
                 #echo user-agent
@@ -95,6 +93,7 @@ async def handle_request(reader, writer):
                     filename = path[filename_idx:]
                     file_path = os.path.join(directory, filename)
                     
+                    #if post request read stream and write to local.
                     if method=='POST':
                         content_length=0
                         for line in request_lines[1:]:
@@ -128,9 +127,8 @@ async def handle_request(reader, writer):
                         )
                         writer.write(response.encode() + file_content)
                         await writer.drain()
-                        writer.close()
-                        await writer.wait_closed()
-                        return
+                        continue
+                    
                     else:
                         response= "HTTP/1.1 404 Not Found\r\n\r\n"
                 
