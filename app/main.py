@@ -51,8 +51,28 @@ async def handle_request(reader, writer):
                 filename = path[filename_idx:]
                 file_path = os.path.join(directory, filename)
                 
+                if method=='POST':
+                    content_length=0
+                    for line in request_lines[1:]:
+                        if line.lower().startswith("conten-length:"):
+                            content_length =  int(line.split(':', 1).strip())
+                            break
+                
+                    #read the body after headers:
+                    headers_end = request.find('\r\n\r\n')
+                    body= request[headers_end +4 : ].encode()
+                    
+                    #if not all bytes read from body, read rest > then write to local file
+                    if len(body) < content_length:
+                        body += await reader.read(content_length - len(body))
+                    
+                    with open(file_path, 'wb') as f:
+                        f.write(body)
+                
+                    response = "HTTP/1.1 201 Created\r\n\r\n"
+                
                 # respond file content if valid path else 404
-                if os.path.isfile(file_path):
+                elif os.path.isfile(file_path):
                     with open(file_path, 'rb') as f:
                         file_content= f.read()
 
