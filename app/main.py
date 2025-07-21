@@ -2,7 +2,7 @@ import asyncio
 from genericpath import isfile
 import sys
 import os
-import gzip
+import gzip, zlib
 
 
 #get dir from sys.argv
@@ -21,6 +21,8 @@ async def handle_request(reader, writer):
             response = "HTTP/1.1 400 Bad Request\r\n\r\n"
         else:
             method, path, _ = request_lines[0].split()
+            
+            #extract required headers from request
             user_agent = ""
             accept_encoding = ""
             
@@ -30,13 +32,17 @@ async def handle_request(reader, writer):
                     break
                 elif line.lower().startswith('accept-encoding'):
                     accept_encoding= line.split(":", maxsplit=1)[1].strip()
+                    encodings=[e.strip() for e in accept_encoding.split(',')]
                     
                     
             #if encoding is accepted for response body
             def maybe_encode(data: bytes) -> tuple:
-                if 'gzip' in accept_encoding:
+                if 'gzip' in encodings:
                     encoded = gzip.compress(data)
                     return encoded, 'gzip'
+                elif 'deflate' in encodings:
+                    encoded = zlib.compress(data)
+                    return encoded, 'deflate'
                 return data, None
             
 
