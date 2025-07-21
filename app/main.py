@@ -1,155 +1,204 @@
 import asyncio
 import sys
 import os
-import gzip, zlib
+import gzip
+import zlib
+from dataclasses import dataclass, field
+from typing import Dict, Optional, Tuple
 
 
-# Get directory from sys.argv
-directory = None
-for i, arg in enumerate(sys.argv):
-    if arg == "--directory" and i + 1 < len(sys.argv):
-        directory = sys.argv[i+1]
+# --- Data Classes for Request and Response ---
 
+@dataclass
+class Request:
+    """Represents an HTTP request, parsed from a client connection."""
+    method: str
+    path: str
+    version: str
+    headers: Dict[str, str] = field(default_factory=dict)
+    body: bytes = b""
 
-async def handle_request(reader, writer):
-    try:
-        # Persistent connection: handle multiple requests per connection
+    @classmethod
+    async def from_reader(cls, reader: asyncio.StreamReader) -> Optional["Request"]:
+        """Reads from the stream and parses the request."""
+        request_line_bytes = await reader.readline()
+        if not request_line_bytes:
+            return None
+        
+        request_line = request_line_bytes.decode().strip()
+        method, path, version = request_line.split()
+
+        headers = {}
         while True:
-            request = (await reader.read(1024)).decode()
-            if not request:
+            line_bytes = await reader.readline()
+            line = line_bytes.decode().strip()
+            if not line:
                 break
-            request_lines = request.splitlines()
-            # Defensive: always check request line format
-            if not request_lines or len(request_lines[0].split()) < 3:
-                response = "HTTP/1.1 400 Bad Request\r\n\r\n"
-                body_bytes = b""
-                writer.write(response.encode())
+            key, value = line.split(":", 1)
+            headers[key.lower()] = value.strip()
+
+        body = b""
+        if "content-length" in headers:
+            content_length = int(headers["content-length"])
+            body = await reader.readexactly(content_length)
+
+        return cls(method, path, version, headers, body)
+
+@dataclass
+class Response:
+    """Represents an HTTP response to be sent to a client."""
+    status_code: int
+    status_message: str
+    headers: Dict[str, str] = field(default_factory=dict)
+    body: bytes = b""
+
+    def to_bytes(self) -> bytes:
+        """Constructs the full raw HTTP response."""
+        response_line = f"HTTP/1.1 {self.status_code} {self.status_message}\r\n"
+        headers_str = "".join(f"{k}: {v}\r\n" for k, v in self.headers.items())
+        return response_line.encode() + headers_str.encode() + b"\r\n" + self.body
+
+# --- HTTP Server with Routing ---
+
+class HTTPServer:
+    """A simple, asynchronous HTTP server with routing."""
+    def __init__(self, host: str = "localhost", port: int = 4221, directory: Optional[str] = None):
+        self.host = host
+        self.port = port
+        self.directory = directory
+
+    async def start(self):
+        """Starts the asyncio server."""
+        server = await asyncio.start_server(self._handle_connection, self.host, self.port)
+        print(f"Logs from your program will appear here!")
+        print(f"Server started on {self.host}:{self.port}")
+        async with server:
+            await server.serve_forever()
+
+    async def _handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        """Handles a single client connection, potentially with multiple requests."""
+        try:
+            while True:
+                request = await Request.from_reader(reader)
+                if not request:
+                    break
+
+                response = await self._route_request(request)
+                
+                # Handle content encoding based on client's Accept-Encoding header
+                accept_encoding = request.headers.get("accept-encoding", "")
+                body, encoding = self._encode_body(response.body, accept_encoding)
+                response.body = body
+                if encoding:
+                    response.headers["Content-Encoding"] = encoding
+                response.headers["Content-Length"] = str(len(response.body))
+
+                # Handle persistent connections (HTTP/1.1 keep-alive)
+                connection_header = request.headers.get("connection", "keep-alive")
+                if connection_header.lower() == "close":
+                    response.headers["Connection"] = "close"
+
+                writer.write(response.to_bytes())
                 await writer.drain()
-                break
-            else:
-                method, path, _ = request_lines[0].split()
-                user_agent = ""
-                encodings = []
-                connection_close = False
 
-                # Parse headers for user-agent, accept-encoding, connection
-                for line in request_lines[1:]:
-                    if line.lower().startswith('user-agent'):
-                        user_agent = line.split(":", maxsplit=1)[1].strip()
-                    elif line.lower().startswith('accept-encoding'):
-                        accept_encoding = line.split(":", maxsplit=1)[1].strip()
-                        # Multiple encoding support: parse comma separated
-                        encodings = [e.strip() for e in accept_encoding.split(',')] if accept_encoding else []
-                    elif line.lower().startswith('connection:'):
-                        if 'close' in line.lower():
-                            connection_close = True
+                if connection_header.lower() == "close":
+                    break
+        except (ConnectionResetError, asyncio.IncompleteReadError):
+            # Client closed the connection unexpectedly
+            pass
+        except Exception as e:
+            print(f"An error occurred: {e}")
+        finally:
+            writer.close()
+            await writer.wait_closed()
 
-                # Helper for encoding response body if requested
-                def maybe_encode(data: bytes) -> tuple:
-                    # Prefer gzip, then deflate, else plain
-                    if 'gzip' in encodings:
-                        encoded = gzip.compress(data)
-                        return encoded, 'gzip'
-                    elif 'deflate' in encodings:
-                        encoded = zlib.compress(data)
-                        return encoded, 'deflate'
-                    return data, None
+    async def _route_request(self, request: Request) -> Response:
+        """Routes the request to the appropriate handler based on path and method."""
+        if request.path == "/":
+            return self.handle_root(request)
+        elif request.path.startswith("/echo/"):
+            return self.handle_echo(request)
+        elif request.path == "/user-agent":
+            return self.handle_user_agent(request)
+        elif request.path.startswith("/files/"):
+            if request.method == "GET":
+                return self.handle_get_file(request)
+            elif request.method == "POST":
+                return self.handle_post_file(request)
+        
+        return Response(404, "Not Found")
 
-                response = ""
-                body_bytes = b""
+    def _encode_body(self, body: bytes, accept_encoding: str) -> Tuple[bytes, Optional[str]]:
+        """Compresses the response body if the client supports it."""
+        encodings = [e.strip() for e in accept_encoding.split(",")]
+        if "gzip" in encodings:
+            return gzip.compress(body), "gzip"
+        if "deflate" in encodings:
+            return zlib.compress(body), "deflate"
+        return body, None
 
-                # Routing logic for endpoints
-                if path == "/":
-                    response = "HTTP/1.1 200 OK\r\n\r\n"
-                elif path.startswith("/echo/"):
-                    echo_value = path[len("/echo/"):]
-                    body_bytes, encoding = maybe_encode(echo_value.encode())
-                    response = (
-                        "HTTP/1.1 200 OK\r\n"
-                        "Content-Type: text/plain\r\n"
-                        f"Content-Length: {len(body_bytes)}\r\n"
-                    )
-                    if encoding:
-                        response += f"Content-Encoding: {encoding}\r\n"
-                    response += '\r\n'
-                elif path == "/user-agent":
-                    body_bytes, encoding = maybe_encode(user_agent.encode())
-                    response = (
-                        "HTTP/1.1 200 OK\r\n"
-                        "Content-Type: text/plain\r\n"
-                        f"Content-Length: {len(body_bytes)}\r\n"
-                    )
-                    if encoding:
-                        response += f"Content-Encoding: {encoding}\r\n"
-                    response += "\r\n"
-                elif path.startswith('/files') and directory:
-                    filename_idx = len("/files/")
-                    filename = path[filename_idx:]
-                    file_path = os.path.join(directory, filename)
-                    if method == 'POST':
-                        # POST: create file from request body
-                        content_length = 0
-                        for line in request_lines[1:]:
-                            if line.lower().startswith("content-length:"):
-                                content_length = int(line.split(':', 1)[1].strip())
-                                break
-                        headers_end = request.find('\r\n\r\n')
-                        body = request[headers_end + 4:].encode()
-                        # Read remaining body bytes if not all received
-                        if len(body) < content_length:
-                            body += await reader.read(content_length - len(body))
-                        with open(file_path, 'wb') as f:
-                            f.write(body)
-                        response = "HTTP/1.1 201 Created\r\n\r\n"
-                        body_bytes = b""
-                    elif os.path.isfile(file_path):
-                        # GET: serve file, support encoding
-                        with open(file_path, 'rb') as f:
-                            file_content = f.read()
-                        body_bytes, encoding = maybe_encode(file_content)
-                        response = (
-                            "HTTP/1.1 200 OK\r\n"
-                            "Content-Type: application/octet-stream\r\n"
-                            f"Content-Length: {len(body_bytes)}\r\n"
-                        )
-                        if encoding:
-                            response += f"Content-Encoding: {encoding}\r\n"
-                        response += "\r\n"
-                    else:
-                        response = "HTTP/1.1 404 Not Found\r\n\r\n"
-                        body_bytes = b""
-                else:
-                    response = "HTTP/1.1 404 Not Found\r\n\r\n"
-                    body_bytes = b""
+    # --- Route Handlers ---
 
-            # Persistent connection: add Connection: close header only if needed
-            if connection_close:
-                header_end = response.find('\r\n\r\n')
-                if header_end != -1:
-                    response = response[:header_end] + "\r\nConnection: close" + response[header_end:]
+    def handle_root(self, request: Request) -> Response:
+        """Handles requests to the root path."""
+        return Response(200, "OK")
 
-            # Send headers and body (never mix binary with string formatting)
-            writer.write(response.encode() + body_bytes)
-            await writer.drain()
-            # If client requested close, break after response
-            if connection_close:
-                break
-    except Exception:
-        # Always send Connection: close on error and close the connection
-        writer.write(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
-        await writer.drain()
-    finally:
-        # Always close the stream to free resources
-        writer.close()
-        await writer.wait_closed()
+    def handle_echo(self, request: Request) -> Response:
+        """Handles /echo/{str} requests."""
+        echo_str = request.path.split("/echo/", 1)[1]
+        return Response(200, "OK", {"Content-Type": "text/plain"}, echo_str.encode())
 
+    def handle_user_agent(self, request: Request) -> Response:
+        """Handles /user-agent requests."""
+        user_agent = request.headers.get("user-agent", "")
+        return Response(200, "OK", {"Content-Type": "text/plain"}, user_agent.encode())
 
-async def main():
-    print("Logs from your program will appear here!")
-    server = await asyncio.start_server(handle_request, 'localhost', 4221)
-    async with server:
-        await server.serve_forever()
+    def handle_get_file(self, request: Request) -> Response:
+        """Handles GET /files/{filename} requests."""
+        if not self.directory:
+            return Response(404, "Not Found")
+        
+        filename = request.path.split("/files/", 1)[1]
+        file_path = os.path.join(self.directory, filename)
 
+        if os.path.isfile(file_path):
+            with open(file_path, "rb") as f:
+                content = f.read()
+            return Response(200, "OK", {"Content-Type": "application/octet-stream"}, content)
+        else:
+            return Response(404, "Not Found")
+
+    def handle_post_file(self, request: Request) -> Response:
+        """Handles POST /files/{filename} requests."""
+        if not self.directory:
+            return Response(404, "Not Found")
+            
+        filename = request.path.split("/files/", 1)[1]
+        file_path = os.path.join(self.directory, filename)
+
+        with open(file_path, "wb") as f:
+            f.write(request.body)
+        
+        return Response(201, "Created")
+
+# --- Main Execution ---
+
+def main():
+    """Parses command-line arguments and starts the server."""
+    directory = None
+    if "--directory" in sys.argv:
+        try:
+            directory_index = sys.argv.index("--directory") + 1
+            directory = sys.argv[directory_index]
+        except (ValueError, IndexError):
+            print("Usage: ./your_program.sh --directory <directory_path>")
+            sys.exit(1)
+
+    server = HTTPServer(port=4221, directory=directory)
+    try:
+        asyncio.run(server.start())
+    except KeyboardInterrupt:
+        print("\nServer shutting down.")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
