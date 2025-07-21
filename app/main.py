@@ -2,6 +2,7 @@ import asyncio
 from genericpath import isfile
 import sys
 import os
+import gzip
 
 
 #get dir from sys.argv
@@ -21,23 +22,51 @@ async def handle_request(reader, writer):
         else:
             method, path, _ = request_lines[0].split()
             user_agent = ""
+            accept_encoding = ""
             
             for line in request_lines[1:]:
                 if line.lower().startswith('user-agent'):
                     user_agent = line.split(":", maxsplit=1)[1].strip()
                     break
+                elif line.lower().startswith('accept-encoding'):
+                    accept_encoding= line.split(":", maxsplit=1)[1].strip()
+                    
+                    
+            #if encoding is accepted for response body
+            def maybe_encode(data: bytes) -> tuple:
+                if 'gzip' in accept_encoding:
+                    encoded = gzip.compress(data)
+                    return encoded, 'gzip'
+                return data, None
+            
 
+            #handle path navigation by request
+            
             if path == "/":
                 response = "HTTP/1.1 200 OK\r\n\r\n"
+            
+            #get request for string sent
             elif path.startswith("/echo/"):
                 echo_value = path[len("/echo/"):]
+                body_bytes, encoding = maybe_encode(echo_value.encode())
                 response = (
                     "HTTP/1.1 200 OK\r\n"
                     "Content-Type: text/plain\r\n"
-                    f"Content-Length: {len(echo_value)}\r\n"
-                    "\r\n"
-                    f"{echo_value}"
+                    f"Content-Length: {len(body_bytes)}\r\n"
                 )
+                
+                if encoding:
+                    response += f"Content-Encoding: {encoding}\r\n"
+                response+= '\r\n'
+                
+                writer.write(response.encode()+ body_bytes)
+                await writer.drain()
+                writer.close()
+                await writer.wait_closed()
+                return
+                
+            
+            #echo user-agent
             elif path == "/user-agent":
                 response = (
                     "HTTP/1.1 200 OK\r\n"
@@ -46,6 +75,8 @@ async def handle_request(reader, writer):
                     "\r\n"
                     f"{user_agent}"
                 )
+                
+            #post and get request for files path
             elif path.startswith('/files') and directory:
                 filename_idx = len("/files/")
                 filename = path[filename_idx:]
