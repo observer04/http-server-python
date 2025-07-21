@@ -24,15 +24,15 @@ async def handle_request(reader, writer):
             
             #extract required headers from request
             user_agent = ""
-            accept_encoding = ""
+            encodings= []
             
             for line in request_lines[1:]:
                 if line.lower().startswith('user-agent'):
                     user_agent = line.split(":", maxsplit=1)[1].strip()
-                    break
+                    
                 elif line.lower().startswith('accept-encoding'):
                     accept_encoding= line.split(":", maxsplit=1)[1].strip()
-                    encodings=[e.strip() for e in accept_encoding.split(',')]
+                    encodings=[e.strip() for e in accept_encoding.split(',')] if accept_encoding else []
                     
                     
             #if encoding is accepted for response body
@@ -91,8 +91,8 @@ async def handle_request(reader, writer):
                 if method=='POST':
                     content_length=0
                     for line in request_lines[1:]:
-                        if line.lower().startswith("conten-length:"):
-                            content_length =  int(line.split(':', 1).strip())
+                        if line.lower().startswith("content-length:"):
+                            content_length =  int(line.split(':', 1)[1].strip())
                             break
                 
                     #read the body after headers:
@@ -132,7 +132,7 @@ async def handle_request(reader, writer):
         writer.write(response.encode())
         await writer.drain()
     except Exception:
-        writer.write(b"HTTP/1.1 404 Bad Request\r\n\r\n")
+        writer.write(b"HTTP/1.1 400 Bad Request\r\n\r\n")
         await writer.drain()
     finally:
         writer.close()
