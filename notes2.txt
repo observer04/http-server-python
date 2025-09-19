@@ -1,0 +1,22 @@
+without dataclass you've to write __init__ function > tedius . just define the attribute 
+field default_factory=dict > each instance will have its own dictionary and not share.
+alternatively instantiate from beginning with Dict[str, str] = {}
+
+classmethod or cls and instance method and self
+called on class or instance but self only on instance
+factory method vs operate on instance data
+can create new object vs cant
+so the first ones is returning a user by using a function associated with class and the second one is returning a user object as welll just the function is linked to the object itself
+
+await allows your code to pause and yield control back to the event loop while waiting for a line of data from the client
+
+we can use dataclass for HTTPServer but not recommended:
+more logic in __init__ than just store. manages resources too
+
+
+client connected callback is a function that gets called automatically when a new client is connected to your server.
+in async servers it handles comm with that specific client.
+
+when you do asyncio.start_server you provide a callback function
+each time a client connects the server calls this function , passes it a stream reader and writer
+handle each client independently , in its own coroutine
